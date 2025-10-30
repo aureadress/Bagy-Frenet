@@ -5,18 +5,20 @@ Webhook Flask robusto e otimizado para **capturar pedidos faturados da Bagy**, s
 ## 🎯 Como Funciona
 
 1. **📥 Bagy dispara webhook** quando pedido é faturado (fulfillment_status = "invoiced")
-2. **💾 Sistema salva** todos os dados do pedido no banco local
-3. **🌐 Você acessa** o painel web `/orders` para ver pedidos pendentes
-4. **📋 Copia dados** de cliente e endereço para criar pedido na Frenet
-5. **🏷️ Gera etiqueta** manualmente na plataforma Frenet
+2. **🚀 Sistema cria pedido automaticamente** na Frenet via API Shipments
+3. **🏷️ Pedido aparece** em "Gerencie suas etiquetas" no painel Frenet
+4. **👤 Você acessa** painel.frenet.com.br e escolhe a transportadora
+5. **📄 Gera etiqueta** manualmente e imprime
 6. **📦 Sistema monitora** rastreio automaticamente
 7. **✅ Atualiza Bagy** quando pedido é entregue
 
 ## ✨ Funcionalidades
 
 - ✅ **Recebe webhooks** da Bagy quando pedidos são faturados
+- ✅ **Cria pedidos automaticamente** na Frenet via API Shipments
+- ✅ **Pedidos aparecem** em "Gerencie suas etiquetas" no painel Frenet
 - ✅ **Salva dados completos** no banco SQLite com campos estruturados
-- ✅ **Painel web HTML** responsivo para visualizar pedidos
+- ✅ **Painel web HTML** responsivo para visualizar pedidos (backup)
 - ✅ **Filtros por status** (pending, shipped, delivered, error)
 - ✅ **Export JSON** para integração com outras ferramentas
 - ✅ **Monitor automático** verifica entregas periodicamente
@@ -26,18 +28,20 @@ Webhook Flask robusto e otimizado para **capturar pedidos faturados da Bagy**, s
 - ✅ **Health checks** e estatísticas em tempo real
 - ✅ **100% pronto para produção**
 
-## ⚠️ Importante: API da Frenet
+## ✅ API da Frenet: Shipments
 
-A API oficial da Frenet **NÃO possui endpoints para criar pedidos programaticamente**. Apenas oferece:
+A API da Frenet oferece o endpoint **Shipments** para criação automática de pedidos:
+- ✅ `POST /v1/shipments` - Cria pedido no painel "Gerencie suas etiquetas"
 - ✅ `/shipping/quote` - Cotação de frete
 - ✅ `/tracking/trackinginfo` - Rastreamento
-- ❌ Criação de pedidos (não existe!)
 
-Por isso, este sistema:
-1. Salva os dados localmente
-2. Você acessa o painel web
-3. Copia os dados e cria manualmente na Frenet
-4. Sistema monitora o rastreio automaticamente
+**Como funciona:**
+1. Sistema envia pedido via API Shipments
+2. Pedido aparece automaticamente no painel Frenet
+3. Você escolhe transportadora e gera etiqueta
+4. Sistema monitora rastreio e atualiza Bagy automaticamente
+
+**Documentação:** https://docs.frenet.com.br/docs/shipments-whitelabel
 
 ## 📋 Requisitos
 
@@ -209,20 +213,20 @@ Todos suportam **GET** e **POST** para compatibilidade com integrações nativas
 - Muda status para "invoiced" (faturado)
 - Bagy dispara webhook automaticamente
 
-### 3️⃣ Sistema recebe e salva o pedido
-- Webhook captura dados completos
-- Salva no banco de dados SQLite
+### 3️⃣ Sistema cria pedido automaticamente na Frenet
+- Webhook captura dados completos do pedido
+- Envia via API Shipments para Frenet
+- Pedido é criado automaticamente
+- Salva no banco de dados local (backup)
 - Status inicial: `pending`
 
-### 4️⃣ Você acessa o painel web
-- Abra: `https://seu-app.railway.app/orders`
-- Veja todos os pedidos pendentes
-- Filtre por status se necessário
-
-### 5️⃣ Copie os dados e crie na Frenet
+### 4️⃣ Pedido aparece no painel Frenet
 - Acesse [painel.frenet.com.br](https://painel.frenet.com.br)
-- Crie o pedido com os dados do painel
-- Escolha a transportadora (recomendado: Loggi Drop Off)
+- Vá em "Gerencie suas etiquetas"
+- Pedido está lá automaticamente! 🎉
+
+### 5️⃣ Você escolhe transportadora e gera etiqueta
+- Escolha transportadora (recomendado: Loggi Drop Off)
 - Gere a etiqueta
 - Imprima e cole no pacote
 
@@ -237,6 +241,7 @@ Todos suportam **GET** e **POST** para compatibilidade com integrações nativas
 
 ### 8️⃣ Cliente recebe e tudo está sincronizado!
 - Bagy mostra pedido como entregue
+- Frenet tem registro da entrega
 - Sistema local tem registro completo
 - Processo finalizado ✅
 
@@ -401,6 +406,7 @@ Recebe webhooks da Bagy (configurado automaticamente)
 | `BAGY_TOKEN` | ✅ Sim | - | Token de autenticação da API Bagy |
 | `FRENET_TOKEN` | ✅ Sim | - | Token de autenticação da API Frenet |
 | `BAGY_BASE` | ❌ Não | `https://api.dooca.store` | URL base da API Bagy |
+| `FRENET_SHIPMENTS_URL` | ❌ Não | `https://api.frenet.com.br/v1/shipments` | URL da API de criação de pedidos Frenet |
 | `FRENET_QUOTE_URL` | ❌ Não | `https://api.frenet.com.br/shipping/quote` | URL da API de cotação Frenet |
 | `FRENET_TRACK_URL` | ❌ Não | `https://api.frenet.com.br/tracking/trackinginfo` | URL da API de rastreio Frenet |
 | `SELLER_CEP` | ❌ Não | `03320-001` | CEP do remetente |
