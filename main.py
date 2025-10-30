@@ -341,14 +341,15 @@ def normalize_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
     # Formato direto (pedido completo no root)
     return pedido
 
-def save_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
-    """Salva dados completos do pedido no banco para consulta posterior."""
+@retry_on_failure(max_attempts=MAX_RETRIES)
+def send_to_frenet_shipments(pedido: Dict[str, Any]) -> Dict[str, Any]:
+    """Envia pedido para API de Shipments da Frenet (cria pedido no painel 'Gerencie suas etiquetas')."""
     # Normalizar dados do pedido
     pedido = normalize_order_data(pedido)
     
     order_id = pedido.get("id", "UNKNOWN")
     order_code = pedido.get("code", "UNKNOWN")
-    logger.info(f"📋 Salvando dados do pedido #{order_code} (ID: {order_id})...")
+    logger.info(f"📋 Enviando pedido #{order_code} (ID: {order_id}) para Frenet...")
     
     # Extrair dados do endereço
     addr = pedido.get("address", {}) or pedido.get("shipping_address", {})
@@ -369,23 +370,96 @@ def save_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning(f"⚠️  Pedido {order_id} sem itens, usando valores padrão")
         items = [{"weight": 1, "length": 20, "height": 10, "width": 15, "quantity": 1}]
     
-    # Calcular valor total do pedido
+    # Calcular peso total e dimensões
+    total_weight = sum(float(it.get("weight", 500)) for it in items) / 1000  # Converter gramas para kg
+    total_weight = max(total_weight, 0.1)  # Mínimo 0.1kg
+    
+    # Calcular valor total
     invoice_value = float(pedido.get("total", 0)) or sum(
         float(it.get("price", 0)) * int(it.get("quantity", 1)) for it in items
     )
     
-    # Montar dados formatados para fácil visualização
+    # Limpar e formatar dados
+    recipient_zipcode = addr.get("zipcode", "").replace("-", "").replace(".", "").strip()
+    recipient_name = cust.get("name", "Cliente")
+    recipient_phone = cust.get("phone", "").replace("(", "").replace(")", "").replace("-", "").replace(" ", "").strip()
+    recipient_email = cust.get("email", "")
+    recipient_cpf = cust.get("cpf", cust.get("document", "")).replace(".", "").replace("-", "").strip()
+    
+    # Montar payload para API Frenet Shipments
+    # Baseado na documentação: https://docs.frenet.com.br/docs/shipments-whitelabel
+    payload = {
+        "OrderNumber": str(order_code),  # Número do pedido na sua plataforma
+        "RecipientDocument": recipient_cpf if recipient_cpf else "",  # CPF do destinatário
+        "RecipientName": recipient_name,
+        "RecipientEmail": recipient_email,
+        "RecipientPhone": recipient_phone,
+        "RecipientZipCode": recipient_zipcode,
+        "RecipientAddress": addr.get("street", addr.get("address", "")),
+        "RecipientAddressNumber": addr.get("number", "S/N"),
+        "RecipientAddressComplement": addr.get("complement", ""),
+        "RecipientAddressDistrict": addr.get("district", addr.get("neighborhood", "")),
+        "RecipientCity": addr.get("city", ""),
+        "RecipientState": addr.get("state", ""),
+        "RecipientCountry": "BR",
+        "PackageHeight": 10,  # cm - ajustar conforme necessário
+        "PackageWidth": 15,   # cm
+        "PackageLength": 20,  # cm
+        "PackageWeight": total_weight,  # kg
+        "InvoiceValue": invoice_value,
+        "ShippingQuoteValue": float(pedido.get("shipping_cost", FORCE_VALUE)),
+        "Items": [
+            {
+                "SKU": it.get("sku", f"ITEM-{idx}"),
+                "Description": it.get("name", "Produto"),
+                "Quantity": int(it.get("quantity", 1)),
+                "Price": float(it.get("price", 0))
+            }
+            for idx, it in enumerate(items, 1)
+        ]
+    }
+    
+    logger.info(f"📤 Enviando para Frenet Shipments API...")
+    logger.info(f"📍 Origem: {SELLER_CEP} → Destino: {recipient_zipcode}")
+    logger.info(f"💰 Valor: R$ {invoice_value} | Peso: {total_weight}kg")
+    logger.info(f"👤 Cliente: {recipient_name} | Pedido: {order_code}")
+    logger.debug(f"Payload Frenet: {payload}")
+    
+    # URL da API de Shipments (pode variar - verificar documentação)
+    shipments_url = os.getenv("FRENET_SHIPMENTS_URL", "https://api.frenet.com.br/v1/shipments")
+    
+    r = requests.post(shipments_url, headers=frenet_headers(), json=payload, timeout=REQUEST_TIMEOUT)
+    
+    if not r.ok:
+        error_msg = f"Erro Frenet Shipments [HTTP {r.status_code}]: {r.text}"
+        logger.error(f"❌ {error_msg}")
+        raise Exception(error_msg)
+    
+    response_data = r.json() if r.content else {}
+    logger.info(f"📥 Resposta Frenet: {response_data}")
+    
+    # Extrair ID do pedido criado na Frenet
+    frenet_order_id = response_data.get("OrderId") or response_data.get("order_id") or response_data.get("id")
+    
+    logger.info(f"✅ Pedido #{order_code} criado na Frenet com sucesso!")
+    if frenet_order_id:
+        logger.info(f"🆔 ID Frenet: {frenet_order_id}")
+    logger.info(f"👉 Acesse painel.frenet.com.br → Gerencie suas etiquetas")
+    logger.info(f"🏷️  O pedido deve aparecer lá para você gerar a etiqueta manualmente")
+    
+    # Retornar dados estruturados
     order_data = {
         "order_id": order_id,
         "order_code": order_code,
+        "frenet_order_id": frenet_order_id,
         "customer": {
-            "name": cust.get("name", ""),
-            "cpf": cust.get("cpf", cust.get("document", "")),
-            "email": cust.get("email", ""),
-            "phone": cust.get("phone", "")
+            "name": recipient_name,
+            "cpf": recipient_cpf,
+            "email": recipient_email,
+            "phone": recipient_phone
         },
         "address": {
-            "zipcode": addr.get("zipcode", "").replace("-", "").replace(".", ""),
+            "zipcode": recipient_zipcode,
             "street": addr.get("street", addr.get("address", "")),
             "number": addr.get("number", "S/N"),
             "complement": addr.get("complement", ""),
@@ -397,19 +471,15 @@ def save_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "name": it.get("name", "Produto"),
                 "quantity": it.get("quantity", 1),
-                "weight": it.get("weight", 1),
+                "weight": it.get("weight", 500),
                 "price": it.get("price", 0)
             }
             for it in items
         ],
         "total_value": invoice_value,
-        "shipping_cost": float(pedido.get("shipping_cost", 0))
+        "shipping_cost": float(pedido.get("shipping_cost", 0)),
+        "frenet_response": response_data
     }
-    
-    logger.info(f"📍 Origem: {SELLER_CEP} → Destino: {order_data['address']['zipcode']}")
-    logger.info(f"💰 Valor: R$ {invoice_value} | Cliente: {order_data['customer']['name']}")
-    logger.info(f"✅ Dados do pedido #{order_code} salvos localmente!")
-    logger.info(f"👉 Acesse /orders para visualizar todos os pedidos pendentes")
     
     return order_data
 
@@ -515,30 +585,32 @@ def webhook():
                     "status": existing[0]
                 }), 200
         
-        # Processar pedido - SALVAR DADOS LOCALMENTE
+        # Processar pedido - ENVIAR PARA FRENET SHIPMENTS API
         try:
-            order_data = save_order_data(pedido_normalizado)
+            order_data = send_to_frenet_shipments(pedido_normalizado)
             
             # Salvar no banco como "pending" (aguardando você gerar etiqueta manualmente na Frenet)
             db_save(order_id, tracking=None, status="pending", order_data=order_data)
             
-            logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) salvo com sucesso!")
-            logger.info(f"📋 Acesse /orders para visualizar os pedidos pendentes")
-            logger.info(f"👉 Copie os dados e crie a etiqueta manualmente na Frenet")
+            logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) enviado para Frenet com sucesso!")
+            logger.info(f"🏷️  Pedido deve aparecer em: painel.frenet.com.br → Gerencie suas etiquetas")
+            logger.info(f"👉 Acesse lá para escolher transportadora e gerar a etiqueta")
             
             return jsonify({
                 "success": True,
                 "order_id": order_id,
                 "order_code": order_code,
-                "message": "Pedido salvo com sucesso! Acesse /orders para visualizar.",
+                "frenet_order_id": order_data.get("frenet_order_id"),
+                "message": "Pedido criado na Frenet! Acesse o painel para gerar etiqueta.",
                 "order_data": order_data,
                 "next_steps": [
-                    "1. Acesse https://seu-dominio.railway.app/orders",
-                    "2. Visualize os pedidos pendentes",
-                    "3. Copie os dados do cliente e endereço",
-                    "4. Acesse a plataforma Frenet e crie o pedido manualmente",
-                    "5. Gere a etiqueta e faça a postagem",
-                    "6. O sistema vai monitorar o rastreio e atualizar a Bagy quando entregue"
+                    "1. Acesse https://painel.frenet.com.br",
+                    "2. Vá em 'Gerencie suas etiquetas'",
+                    "3. Encontre o pedido #" + str(order_code),
+                    "4. Escolha a transportadora (recomendado: Loggi Drop Off)",
+                    "5. Gere a etiqueta e imprima",
+                    "6. Faça a postagem do pacote",
+                    "7. O sistema vai monitorar o rastreio e atualizar a Bagy quando entregue"
                 ]
             }), 200
             
