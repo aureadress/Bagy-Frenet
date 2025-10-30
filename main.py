@@ -214,23 +214,40 @@ def frenet_headers() -> Dict[str, str]:
         "Accept": "application/json"
     }
 
+def normalize_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza dados do pedido - suporta formato direto e formato com 'event'/'data'."""
+    # Se o webhook vier com estrutura {"event": "...", "data": {...}}
+    if "event" in pedido and "data" in pedido:
+        logger.info(f"📦 Formato webhook com event: {pedido.get('event')}")
+        return pedido["data"]
+    
+    # Formato direto (pedido completo no root)
+    return pedido
+
 @retry_on_failure(max_attempts=MAX_RETRIES)
 def send_to_frenet(pedido: Dict[str, Any]) -> str:
     """Envia pedido para a Frenet e retorna código de rastreio."""
+    # Normalizar dados do pedido
+    pedido = normalize_order_data(pedido)
+    
     order_id = pedido.get("id", "UNKNOWN")
+    logger.info(f"📋 Processando pedido {order_id} para Frenet...")
     
     # Extrair dados do endereço
     addr = pedido.get("address", {}) or pedido.get("shipping_address", {})
+    logger.info(f"📍 Endereço encontrado: {bool(addr)}")
     if not addr:
         raise ValueError("Endereço de entrega não encontrado no pedido")
     
     # Extrair dados do cliente
     cust = pedido.get("customer", {})
+    logger.info(f"👤 Cliente encontrado: {bool(cust)} - Nome: {cust.get('name', 'N/A')}")
     if not cust:
         raise ValueError("Dados do cliente não encontrados no pedido")
     
     # Processar itens
     items = pedido.get("items", []) or []
+    logger.info(f"📦 Itens encontrados: {len(items)}")
     if not items:
         logger.warning(f"⚠️  Pedido {order_id} sem itens, usando valores padrão")
         items = [{"weight": 1, "length": 20, "height": 10, "width": 15, "quantity": 1}]
