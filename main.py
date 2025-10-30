@@ -255,14 +255,14 @@ def normalize_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
     return pedido
 
 @retry_on_failure(max_attempts=MAX_RETRIES)
-def send_to_frenet(pedido: Dict[str, Any]) -> str:
-    """Cotação na Frenet e retorna código de rastreio gerado."""
+def send_to_frenet(pedido: Dict[str, Any]) -> None:
+    """Envia dados do pedido para Frenet (para gerar etiqueta manualmente depois)."""
     # Normalizar dados do pedido
     pedido = normalize_order_data(pedido)
     
     order_id = pedido.get("id", "UNKNOWN")
     order_code = pedido.get("code", "UNKNOWN")
-    logger.info(f"📋 Processando pedido #{order_code} (ID: {order_id}) para Frenet...")
+    logger.info(f"📋 Enviando dados do pedido #{order_code} (ID: {order_id}) para Frenet...")
     
     # Extrair dados do endereço
     addr = pedido.get("address", {}) or pedido.get("shipping_address", {})
@@ -299,20 +299,30 @@ def send_to_frenet(pedido: Dict[str, Any]) -> str:
     )
     invoice_value = max(invoice_value, FORCE_VALUE)  # Usar valor mínimo se necessário
     
-    # Montar payload para COTAÇÃO
+    # Montar payload COMPLETO com todos os dados para Frenet
     payload = {
         "SellerCEP": SELLER_CEP.replace("-", "").replace(".", ""),
+        "RecipientName": cust.get("name", "Cliente"),
         "RecipientCEP": addr.get("zipcode", "").replace("-", "").replace(".", ""),
+        "RecipientAddress": addr.get("street", ""),
+        "RecipientNumber": addr.get("number", "S/N"),
+        "RecipientComplement": addr.get("complement", ""),
+        "RecipientDistrict": addr.get("district", addr.get("neighborhood", "")),
+        "RecipientCity": addr.get("city", ""),
+        "RecipientState": addr.get("state", ""),
+        "RecipientPhone": cust.get("phone", ""),
+        "RecipientEmail": cust.get("email", ""),
         "ShipmentInvoiceValue": invoice_value,
         "ShippingItemArray": produtos,
-        "ShippingServiceCode": FORCE_CARRIER_CODE
+        "OrderId": order_code  # Referência do pedido
     }
     
-    logger.info(f"🚚 Cotando frete na Frenet com transportadora {FORCE_CARRIER_CODE} ({FORCE_CARRIER_NAME})...")
-    logger.info(f"📍 Rota: {payload['SellerCEP']} → {payload['RecipientCEP']} | Valor: R$ {invoice_value}")
+    logger.info(f"📤 Enviando dados para Frenet...")
+    logger.info(f"📍 Origem: {payload['SellerCEP']} → Destino: {payload['RecipientCEP']}")
+    logger.info(f"💰 Valor: R$ {invoice_value} | Cliente: {cust.get('name', 'N/A')}")
     logger.debug(f"Payload Frenet: {payload}")
     
-    r = requests.post(FRENET_QUOTE_URL, headers=frenet_headers(), json=payload, timeout=REQUEST_TIMEOUT)
+    r = requests.post(SHIPPING_API_URL, headers=shipping_api_headers(), json=payload, timeout=REQUEST_TIMEOUT)
     
     if not r.ok:
         error_msg = f"Erro Frenet [HTTP {r.status_code}]: {r.text}"
@@ -322,17 +332,8 @@ def send_to_frenet(pedido: Dict[str, Any]) -> str:
     data = r.json() if r.content else {}
     logger.info(f"📥 Resposta Frenet: {data}")
     
-    # Frenet retorna opções de frete, vamos gerar um código de rastreio baseado no pedido
-    # Formato: CARRIER-ORDERCODE-TIMESTAMP
-    import time
-    timestamp = str(int(time.time()))[-6:]  # Últimos 6 dígitos do timestamp
-    tracking = f"{FORCE_CARRIER_CODE}-{order_code}-{timestamp}"
-    
-    logger.info(f"✅ Pedido #{order_code} processado via Frenet")
-    logger.info(f"📦 Código de rastreio gerado: {tracking}")
-    logger.info(f"🚚 Transportadora: {FORCE_CARRIER_NAME} ({FORCE_CARRIER_CODE})")
-    
-    return tracking
+    logger.info(f"✅ Dados do pedido #{order_code} enviados para Frenet com sucesso!")
+    logger.info(f"👉 Próximo passo: Acesse a Frenet para gerar a etiqueta manualmente")
 
 def frenet_check_delivered(code: str) -> bool:
     """Verifica se pedido foi entregue consultando rastreio na Frenet."""
@@ -431,18 +432,30 @@ def webhook():
                     "status": existing[0]
                 }), 200
         
-        # Processar pedido
+        # Processar pedido - APENAS ENVIAR DADOS PARA FRENET
         try:
-            tracking = send_to_frenet(pedido_normalizado)
-            bagy_mark_shipped(order_id, tracking)
-            db_save(order_id, tracking, status="shipped")
+            send_to_frenet(pedido_normalizado)
             
-            logger.info(f"✅ Pedido {order_id} processado com sucesso! Rastreio: {tracking}")
+            # Salvar no banco como "pending" (aguardando você gerar etiqueta manualmente)
+            db_save(order_id, tracking=None, status="pending")
+            
+            logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) enviado para Frenet!")
+            logger.info(f"📋 Acesse a Frenet para gerar a etiqueta manualmente")
+            logger.info(f"⏳ Após postar, o sistema vai monitorar o rastreio automaticamente")
+            
             return jsonify({
                 "success": True,
                 "order_id": order_id,
-                "tracking_code": tracking,
-                "message": "Pedido enviado à Frenet e marcado como enviado na Bagy"
+                "order_code": order_code,
+                "message": "Dados enviados para Frenet. Gere a etiqueta manualmente na plataforma.",
+                "next_steps": [
+                    "1. Acesse a plataforma Frenet",
+                    "2. Encontre o pedido e escolha a transportadora",
+                    "3. Gere a etiqueta",
+                    "4. Faça a postagem",
+                    "5. Informe o código de rastreio na Frenet",
+                    "6. O sistema vai monitorar e atualizar a Bagy quando entregue"
+                ]
             }), 200
             
         except Exception as e:
@@ -461,8 +474,18 @@ def webhook():
 
 # === MONITOR DE RASTREIO ===
 def tracking_worker():
-    """Worker que monitora status de entrega dos pedidos."""
+    """
+    Worker que monitora status de entrega dos pedidos.
+    
+    IMPORTANTE: Este worker só funciona DEPOIS que você:
+    1. Gerar a etiqueta manualmente na Frenet
+    2. Fazer a postagem física
+    3. Adicionar o código de rastreio no banco de dados
+    
+    O worker verifica periodicamente se o pedido foi entregue e atualiza a Bagy automaticamente.
+    """
     logger.info(f"🔄 Iniciando monitor de rastreio (intervalo: {TRACKER_INTERVAL}s)")
+    logger.info(f"📋 Este worker aguarda você adicionar códigos de rastreio manualmente")
     
     while True:
         try:
