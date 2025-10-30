@@ -320,8 +320,9 @@ def frenet_check_delivered(code: str) -> bool:
 
 # === WEBHOOK ===
 @app.route("/webhook", methods=["POST"])
+@app.route("/", methods=["POST"])
 def webhook():
-    """Endpoint para receber webhooks da Bagy."""
+    """Endpoint para receber webhooks da Bagy (aceita / e /webhook)."""
     try:
         pedido = request.json or {}
         order_id = pedido.get("id")
