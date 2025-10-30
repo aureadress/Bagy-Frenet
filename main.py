@@ -29,8 +29,8 @@ FRENET_TRACK_URL = os.getenv("FRENET_TRACK_URL", "https://api.frenet.com.br/trac
 
 SELLER_CEP = os.getenv("SELLER_CEP", "03320-001")
 FORCE_VALUE = float(os.getenv("FORCE_VALUE", "10.00"))
-FORCE_CARRIER_CODE = os.getenv("FORCE_CARRIER_CODE", "LOGGI")
-FORCE_CARRIER_NAME = os.getenv("FORCE_CARRIER_NAME", "Entrega Loggi")
+FORCE_CARRIER_CODE = os.getenv("FORCE_CARRIER_CODE", "LOG_DRPOFF")
+FORCE_CARRIER_NAME = os.getenv("FORCE_CARRIER_NAME", "Loggi Drop Off")
 
 TRACKER_INTERVAL = int(os.getenv("TRACKER_INTERVAL", "600"))  # segundos (10 min)
 DB_PATH = os.getenv("DB_PATH", "data.db")
@@ -44,7 +44,8 @@ if not BAGY_TOKEN:
 if not FRENET_TOKEN:
     logger.warning("⚠️  FRENET_TOKEN não configurado! A integração não funcionará.")
 
-logger.info(f"🔧 Configurações carregadas: SELLER_CEP={SELLER_CEP}, FORCE_VALUE=R${FORCE_VALUE}, CARRIER={FORCE_CARRIER_NAME}")
+logger.info(f"🔧 Configurações carregadas: SELLER_CEP={SELLER_CEP}, FORCE_VALUE=R${FORCE_VALUE}")
+logger.info(f"🚚 Transportadora padrão: {FORCE_CARRIER_NAME} (Código: {FORCE_CARRIER_CODE})")
 
 # === BANCO LOCAL (SQLite) ===
 def db_init():
@@ -278,7 +279,7 @@ def send_to_frenet(pedido: Dict[str, Any]) -> str:
         "ShippingServiceDescription": FORCE_CARRIER_NAME
     }
     
-    logger.info(f"🚚 Enviando pedido {order_id} para Frenet...")
+    logger.info(f"🚚 Enviando pedido {order_id} para Frenet com transportadora {FORCE_CARRIER_CODE} ({FORCE_CARRIER_NAME})...")
     logger.debug(f"Payload Frenet: {payload}")
     
     r = requests.post(FRENET_QUOTE_URL, headers=frenet_headers(), json=payload, timeout=REQUEST_TIMEOUT)
