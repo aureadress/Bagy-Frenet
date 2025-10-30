@@ -24,13 +24,22 @@ BAGY_TOKEN = os.getenv("BAGY_TOKEN")
 FRENET_TOKEN = os.getenv("FRENET_TOKEN")
 
 BAGY_BASE = os.getenv("BAGY_BASE", "https://api.dooca.store")
-FRENET_QUOTE_URL = os.getenv("FRENET_QUOTE_URL", "https://api.frenet.com.br/shipping/quote")
-FRENET_TRACK_URL = os.getenv("FRENET_TRACK_URL", "https://api.frenet.com.br/tracking/trackinginfo")
+
+# URLs da API de envio (configurável)
+SHIPPING_API_URL = os.getenv("SHIPPING_API_URL", "https://api.frenet.com.br/shipping/quote")
+TRACKING_API_URL = os.getenv("TRACKING_API_URL", "https://api.frenet.com.br/tracking/trackinginfo")
+
+# Compatibilidade com nomes antigos
+FRENET_QUOTE_URL = SHIPPING_API_URL
+FRENET_TRACK_URL = TRACKING_API_URL
 
 SELLER_CEP = os.getenv("SELLER_CEP", "03320-001")
 FORCE_VALUE = float(os.getenv("FORCE_VALUE", "10.00"))
 FORCE_CARRIER_CODE = os.getenv("FORCE_CARRIER_CODE", "LOG_DRPOFF")
 FORCE_CARRIER_NAME = os.getenv("FORCE_CARRIER_NAME", "Loggi Drop Off")
+
+# Tipo de integração: "frenet", "loggi", "kangu", "custom"
+INTEGRATION_TYPE = os.getenv("INTEGRATION_TYPE", "frenet")
 
 TRACKER_INTERVAL = int(os.getenv("TRACKER_INTERVAL", "600"))  # segundos (10 min)
 DB_PATH = os.getenv("DB_PATH", "data.db")
@@ -46,6 +55,8 @@ if not FRENET_TOKEN:
 
 logger.info(f"🔧 Configurações carregadas: SELLER_CEP={SELLER_CEP}, FORCE_VALUE=R${FORCE_VALUE}")
 logger.info(f"🚚 Transportadora padrão: {FORCE_CARRIER_NAME} (Código: {FORCE_CARRIER_CODE})")
+logger.info(f"🔗 Tipo de integração: {INTEGRATION_TYPE.upper()}")
+logger.info(f"🌐 API de envio: {SHIPPING_API_URL}")
 
 # === BANCO LOCAL (SQLite) ===
 def db_init():
@@ -205,15 +216,33 @@ def bagy_mark_delivered(order_id: str):
     return r.json() if r.content else {}
 
 # === FUNÇÕES FRENET ===
-def frenet_headers() -> Dict[str, str]:
-    """Retorna headers para requisições à API da Frenet."""
+def shipping_api_headers() -> Dict[str, str]:
+    """Retorna headers para requisições à API de envio (configurável por tipo)."""
     if not FRENET_TOKEN:
         raise ValueError("FRENET_TOKEN não configurado")
-    return {
-        "Authorization": f"Basic {FRENET_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
+    
+    # Headers específicos por tipo de integração
+    if INTEGRATION_TYPE == "loggi":
+        return {
+            "Authorization": f"Bearer {FRENET_TOKEN}",
+            "Content-Type": "application/json"
+        }
+    elif INTEGRATION_TYPE == "kangu":
+        return {
+            "token": FRENET_TOKEN,
+            "Content-Type": "application/json"
+        }
+    else:  # frenet ou custom
+        return {
+            "Authorization": f"Basic {FRENET_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+
+# Alias para compatibilidade
+def frenet_headers() -> Dict[str, str]:
+    """Alias para shipping_api_headers() - compatibilidade."""
+    return shipping_api_headers()
 
 def normalize_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
     """Normaliza dados do pedido - suporta formato direto e formato com 'event'/'data'."""

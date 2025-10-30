@@ -287,6 +287,52 @@ Recebe webhooks da Bagy (configurado automaticamente)
 | `REQUEST_TIMEOUT` | ❌ Não | `30` | Timeout de requisições HTTP (segundos) |
 | `PORT` | ❌ Não | `3000` | Porta do servidor |
 
+### 🔌 Configuração Avançada de Endpoints
+
+A integração é **flexível** e permite usar qualquer API de envio!
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `INTEGRATION_TYPE` | `frenet` | Tipo: `frenet`, `loggi`, `kangu`, `custom` |
+| `SHIPPING_API_URL` | `https://api.frenet.com.br/shipping/quote` | URL da API de envio |
+| `TRACKING_API_URL` | `https://api.frenet.com.br/tracking/trackinginfo` | URL da API de rastreio |
+
+#### Exemplos de configuração:
+
+**Usar Frenet (padrão):**
+```env
+INTEGRATION_TYPE=frenet
+SHIPPING_API_URL=https://api.frenet.com.br/shipping/quote
+```
+
+**Usar Loggi diretamente:**
+```env
+INTEGRATION_TYPE=loggi
+SHIPPING_API_URL=https://api.loggi.com/v1/shipments
+FRENET_TOKEN=seu_token_loggi_aqui
+```
+
+**Usar Kangu:**
+```env
+INTEGRATION_TYPE=kangu
+SHIPPING_API_URL=https://portal.kangu.com.br/tms/transporte/solicitar
+FRENET_TOKEN=seu_token_kangu_aqui
+```
+
+**API customizada:**
+```env
+INTEGRATION_TYPE=custom
+SHIPPING_API_URL=https://sua-api.com/v1/criar-envio
+TRACKING_API_URL=https://sua-api.com/v1/rastreio
+```
+
+#### Headers por tipo de integração:
+
+- **Frenet:** `Authorization: Basic {token}`
+- **Loggi:** `Authorization: Bearer {token}`
+- **Kangu:** `token: {token}`
+- **Custom:** `Authorization: Basic {token}` (padrão)
+
 ## 🔍 Logs e Monitoramento
 
 A aplicação gera logs detalhados com emojis para facilitar identificação:
