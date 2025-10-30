@@ -389,13 +389,18 @@ def webhook():
         else:
             # POST - pedido vem no body
             pedido = request.json or {}
-            order_id = pedido.get("id")
+            
+            # Normalizar PRIMEIRO para extrair o ID correto
+            pedido_temp = normalize_order_data(pedido)
+            order_id = pedido_temp.get("id")
+            order_code = pedido_temp.get("code")
             
             if not order_id:
                 logger.warning("⚠️  Webhook POST recebido sem ID de pedido")
+                logger.warning(f"📦 Payload recebido: {pedido}")
                 return jsonify({"error": "ID do pedido não encontrado"}), 400
             
-            logger.info(f"📥 Webhook POST recebido para pedido {order_id}")
+            logger.info(f"📥 Webhook POST recebido para pedido {order_id} (código: {order_code})")
             logger.info(f"📦 Payload completo: {pedido}")
         
         # Normalizar dados do pedido (extrair de "data" se necessário)
