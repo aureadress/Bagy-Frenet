@@ -319,20 +319,40 @@ def frenet_check_delivered(code: str) -> bool:
         return False
 
 # === WEBHOOK ===
-@app.route("/webhook", methods=["POST"])
-@app.route("/", methods=["POST"])
+@app.route("/webhook", methods=["POST", "GET"])
+@app.route("/", methods=["POST", "GET"])
+@app.route("/order", methods=["POST", "GET"])
 def webhook():
-    """Endpoint para receber webhooks da Bagy (aceita / e /webhook)."""
+    """Endpoint para receber webhooks da Bagy (aceita /, /webhook, /order - GET e POST)."""
     try:
-        pedido = request.json or {}
-        order_id = pedido.get("id")
-        
-        if not order_id:
-            logger.warning("⚠️  Webhook recebido sem ID de pedido")
-            return jsonify({"error": "ID do pedido não encontrado"}), 400
-        
-        logger.info(f"📥 Webhook recebido para pedido {order_id}")
-        logger.info(f"📦 Payload completo: {pedido}")
+        # Suportar GET (estilo integração nativa) e POST
+        if request.method == "GET":
+            order_id = request.args.get("order") or request.args.get("id")
+            logger.info(f"📥 Webhook GET recebido - order_id: {order_id}, query params: {dict(request.args)}")
+            
+            if not order_id:
+                logger.warning("⚠️  Webhook GET sem parâmetro 'order' ou 'id'")
+                return jsonify({"error": "Parâmetro 'order' não encontrado"}), 400
+            
+            # Buscar pedido completo da API Bagy
+            try:
+                logger.info(f"🔍 Buscando dados do pedido {order_id} na Bagy...")
+                pedido = bagy_get_order(order_id)
+                logger.info(f"📦 Pedido obtido da Bagy: {pedido}")
+            except Exception as e:
+                logger.error(f"❌ Erro ao buscar pedido da Bagy: {e}")
+                return jsonify({"error": f"Erro ao buscar pedido: {str(e)}"}), 500
+        else:
+            # POST - pedido vem no body
+            pedido = request.json or {}
+            order_id = pedido.get("id")
+            
+            if not order_id:
+                logger.warning("⚠️  Webhook POST recebido sem ID de pedido")
+                return jsonify({"error": "ID do pedido não encontrado"}), 400
+            
+            logger.info(f"📥 Webhook POST recebido para pedido {order_id}")
+            logger.info(f"📦 Payload completo: {pedido}")
         
         # Log do status (se existir)
         fulfillment_status = pedido.get("fulfillment_status", "")
