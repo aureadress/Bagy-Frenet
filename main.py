@@ -374,20 +374,25 @@ def webhook():
         # Normalizar dados do pedido (extrair de "data" se necessário)
         pedido_normalizado = normalize_order_data(pedido)
         order_id = pedido_normalizado.get("id")
+        order_code = pedido_normalizado.get("code")
+        
+        logger.info(f"🔢 Pedido - ID: {order_id}, Código: {order_code}")
         
         # Verificar fulfillment_status - SÓ PROCESSAR SE ESTIVER FATURADO
         fulfillment_status = pedido_normalizado.get("fulfillment_status", "")
         logger.info(f"📊 Status do fulfillment: '{fulfillment_status}'")
         
         if fulfillment_status != "invoiced":
-            logger.info(f"⏭️  Pedido {order_id} ignorado - status '{fulfillment_status}' (esperado: 'invoiced')")
+            logger.info(f"⏭️  Pedido #{order_code} (ID: {order_id}) ignorado - status '{fulfillment_status}' (esperado: 'invoiced')")
             return jsonify({
                 "message": "Pedido ignorado - apenas pedidos FATURADOS são processados",
+                "order_id": order_id,
+                "order_code": order_code,
                 "fulfillment_status": fulfillment_status,
                 "required": "invoiced"
             }), 200
         
-        logger.info(f"✅ Pedido {order_id} está FATURADO, processando...")
+        logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) está FATURADO, processando...")
         
         # Verificar se já foi processado
         with sqlite3.connect(DB_PATH) as con:
