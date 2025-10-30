@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  webhook:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - BAGY_TOKEN=${BAGY_TOKEN}
+      - FRENET_TOKEN=${FRENET_TOKEN}
+      - SELLER_CEP=${SELLER_CEP:-03320-001}
+      - FORCE_VALUE=${FORCE_VALUE:-10.00}
+      - FORCE_CARRIER_CODE=${FORCE_CARRIER_CODE:-LOGGI}
+      - FORCE_CARRIER_NAME=${FORCE_CARRIER_NAME:-Entrega Loggi}
+      - TRACKER_INTERVAL=${TRACKER_INTERVAL:-600}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-30}
+      - PORT=3000
+      - DB_PATH=/app/data/data.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
