@@ -371,13 +371,23 @@ def webhook():
             logger.info(f"📥 Webhook POST recebido para pedido {order_id}")
             logger.info(f"📦 Payload completo: {pedido}")
         
-        # Log do status (se existir)
-        fulfillment_status = pedido.get("fulfillment_status", "")
-        logger.info(f"📊 Status do pedido: '{fulfillment_status}' (campo: fulfillment_status)")
+        # Normalizar dados do pedido (extrair de "data" se necessário)
+        pedido_normalizado = normalize_order_data(pedido)
+        order_id = pedido_normalizado.get("id")
         
-        # REMOVIDO: Não verificar status - processar todos os pedidos
-        # A Bagy não envia fulfillment_status de forma confiável
-        # Você pode controlar quais pedidos processar diretamente na Bagy
+        # Verificar fulfillment_status - SÓ PROCESSAR SE ESTIVER FATURADO
+        fulfillment_status = pedido_normalizado.get("fulfillment_status", "")
+        logger.info(f"📊 Status do fulfillment: '{fulfillment_status}'")
+        
+        if fulfillment_status != "invoiced":
+            logger.info(f"⏭️  Pedido {order_id} ignorado - status '{fulfillment_status}' (esperado: 'invoiced')")
+            return jsonify({
+                "message": "Pedido ignorado - apenas pedidos FATURADOS são processados",
+                "fulfillment_status": fulfillment_status,
+                "required": "invoiced"
+            }), 200
+        
+        logger.info(f"✅ Pedido {order_id} está FATURADO, processando...")
         
         # Verificar se já foi processado
         with sqlite3.connect(DB_PATH) as con:
@@ -392,7 +402,7 @@ def webhook():
         
         # Processar pedido
         try:
-            tracking = send_to_frenet(pedido)
+            tracking = send_to_frenet(pedido_normalizado)
             bagy_mark_shipped(order_id, tracking)
             db_save(order_id, tracking, status="shipped")
             
