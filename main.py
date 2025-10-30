@@ -585,38 +585,110 @@ def webhook():
                     "status": existing[0]
                 }), 200
         
-        # Processar pedido - ENVIAR PARA FRENET SHIPMENTS API
+        # Processar pedido - ENVIAR PARA FRENET SHIPMENTS API (com fallback)
         try:
-            order_data = send_to_frenet_shipments(pedido_normalizado)
-            
-            # Salvar no banco como "pending" (aguardando você gerar etiqueta manualmente na Frenet)
-            db_save(order_id, tracking=None, status="pending", order_data=order_data)
-            
-            logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) enviado para Frenet com sucesso!")
-            logger.info(f"🏷️  Pedido deve aparecer em: painel.frenet.com.br → Gerencie suas etiquetas")
-            logger.info(f"👉 Acesse lá para escolher transportadora e gerar a etiqueta")
-            
-            return jsonify({
-                "success": True,
-                "order_id": order_id,
-                "order_code": order_code,
-                "frenet_order_id": order_data.get("frenet_order_id"),
-                "message": "Pedido criado na Frenet! Acesse o painel para gerar etiqueta.",
-                "order_data": order_data,
-                "next_steps": [
-                    "1. Acesse https://painel.frenet.com.br",
-                    "2. Vá em 'Gerencie suas etiquetas'",
-                    "3. Encontre o pedido #" + str(order_code),
-                    "4. Escolha a transportadora (recomendado: Loggi Drop Off)",
-                    "5. Gere a etiqueta e imprima",
-                    "6. Faça a postagem do pacote",
-                    "7. O sistema vai monitorar o rastreio e atualizar a Bagy quando entregue"
-                ]
-            }), 200
+            # Tentar enviar para API Frenet Shipments
+            try:
+                order_data = send_to_frenet_shipments(pedido_normalizado)
+                
+                # Salvar no banco como "pending" (aguardando você gerar etiqueta manualmente na Frenet)
+                db_save(order_id, tracking=None, status="pending", order_data=order_data)
+                
+                logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) enviado para Frenet com sucesso!")
+                logger.info(f"🏷️  Pedido deve aparecer em: painel.frenet.com.br → Gerencie suas etiquetas")
+                logger.info(f"👉 Acesse lá para escolher transportadora e gerar a etiqueta")
+                
+                return jsonify({
+                    "success": True,
+                    "order_id": order_id,
+                    "order_code": order_code,
+                    "frenet_order_id": order_data.get("frenet_order_id"),
+                    "message": "Pedido criado na Frenet! Acesse o painel para gerar etiqueta.",
+                    "order_data": order_data,
+                    "method": "api",
+                    "next_steps": [
+                        "1. Acesse https://painel.frenet.com.br",
+                        "2. Vá em 'Gerencie suas etiquetas'",
+                        "3. Encontre o pedido #" + str(order_code),
+                        "4. Escolha a transportadora (recomendado: Loggi Drop Off)",
+                        "5. Gere a etiqueta e imprima",
+                        "6. Faça a postagem do pacote",
+                        "7. O sistema vai monitorar o rastreio e atualizar a Bagy quando entregue"
+                    ]
+                }), 200
+                
+            except Exception as api_error:
+                # Se API falhar (404, 401, timeout, etc), usar modo fallback
+                error_msg = str(api_error)
+                logger.warning(f"⚠️  API Frenet falhou: {error_msg}")
+                logger.warning(f"💾 Salvando pedido localmente como fallback...")
+                
+                # Extrair dados básicos para salvar
+                cust = pedido_normalizado.get("customer", {})
+                addr = pedido_normalizado.get("address", {}) or pedido_normalizado.get("shipping_address", {})
+                items = pedido_normalizado.get("items", []) or []
+                
+                order_data = {
+                    "order_id": order_id,
+                    "order_code": order_code,
+                    "customer": {
+                        "name": cust.get("name", ""),
+                        "cpf": cust.get("cpf", cust.get("document", "")),
+                        "email": cust.get("email", ""),
+                        "phone": cust.get("phone", "")
+                    },
+                    "address": {
+                        "zipcode": addr.get("zipcode", "").replace("-", "").replace(".", ""),
+                        "street": addr.get("street", addr.get("address", "")),
+                        "number": addr.get("number", "S/N"),
+                        "complement": addr.get("complement", ""),
+                        "neighborhood": addr.get("district", addr.get("neighborhood", "")),
+                        "city": addr.get("city", ""),
+                        "state": addr.get("state", "")
+                    },
+                    "items": [
+                        {
+                            "name": it.get("name", "Produto"),
+                            "quantity": it.get("quantity", 1),
+                            "weight": it.get("weight", 500),
+                            "price": it.get("price", 0)
+                        }
+                        for it in items
+                    ],
+                    "total_value": float(pedido_normalizado.get("total", 0)),
+                    "shipping_cost": float(pedido_normalizado.get("shipping_cost", 0))
+                }
+                
+                # Salvar no banco
+                db_save(order_id, tracking=None, status="pending", order_data=order_data)
+                
+                logger.info(f"✅ Pedido #{order_code} salvo localmente!")
+                logger.info(f"🌐 Acesse /orders para visualizar e criar manualmente na Frenet")
+                logger.info(f"⚠️  Nota: API Frenet não disponível, usando modo manual")
+                
+                return jsonify({
+                    "success": True,
+                    "order_id": order_id,
+                    "order_code": order_code,
+                    "message": "Pedido salvo localmente. API Frenet indisponível.",
+                    "order_data": order_data,
+                    "method": "fallback",
+                    "api_error": error_msg,
+                    "next_steps": [
+                        "1. Acesse https://seu-dominio.railway.app/orders",
+                        "2. Visualize o pedido #" + str(order_code),
+                        "3. Copie os dados do cliente e endereço",
+                        "4. Acesse https://painel.frenet.com.br manualmente",
+                        "5. Crie o pedido com os dados copiados",
+                        "6. Escolha transportadora e gere etiqueta",
+                        "7. Faça a postagem do pacote",
+                        "8. O sistema vai monitorar o rastreio e atualizar a Bagy quando entregue"
+                    ]
+                }), 200
             
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"❌ Erro ao processar pedido {order_id}: {error_msg}")
+            logger.error(f"❌ Erro crítico ao processar pedido {order_id}: {error_msg}")
             db_save(order_id, status="error", error=error_msg)
             
             return jsonify({
