@@ -67,8 +67,23 @@ def db_init():
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bagy_order_id TEXT UNIQUE NOT NULL,
+                bagy_order_code TEXT,
                 tracking_code TEXT,
                 status TEXT NOT NULL DEFAULT 'created',
+                customer_name TEXT,
+                customer_cpf TEXT,
+                customer_email TEXT,
+                customer_phone TEXT,
+                address_zipcode TEXT,
+                address_street TEXT,
+                address_number TEXT,
+                address_complement TEXT,
+                address_neighborhood TEXT,
+                address_city TEXT,
+                address_state TEXT,
+                total_value REAL,
+                shipping_cost REAL,
+                order_data_json TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 delivered_at TEXT,
@@ -81,6 +96,9 @@ def db_init():
             con.execute("""
             CREATE INDEX IF NOT EXISTS idx_tracking ON orders(tracking_code)
             """)
+            con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_order_code ON orders(bagy_order_code)
+            """)
             con.commit()
         logger.info(f"✅ Banco de dados inicializado: {DB_PATH}")
     except Exception as e:
@@ -89,8 +107,9 @@ def db_init():
 
 db_init()
 
-def db_save(order_id: str, tracking: Optional[str] = None, status: str = "created", error: Optional[str] = None):
+def db_save(order_id: str, tracking: Optional[str] = None, status: str = "created", error: Optional[str] = None, order_data: Optional[Dict[str, Any]] = None):
     """Salva ou atualiza um pedido no banco de dados."""
+    import json
     try:
         with sqlite3.connect(DB_PATH) as con:
             # Verificar se já existe
@@ -98,17 +117,85 @@ def db_save(order_id: str, tracking: Optional[str] = None, status: str = "create
             existing = cur.fetchone()
             retry_count = (existing[0] if existing else 0) + (1 if error else 0)
             
-            con.execute("""
-            INSERT INTO orders(bagy_order_id, tracking_code, status, retry_count, last_error, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(bagy_order_id) DO UPDATE SET
-                tracking_code = COALESCE(?, tracking_code),
-                status = ?,
-                retry_count = ?,
-                last_error = ?,
-                updated_at = CURRENT_TIMESTAMP,
-                delivered_at = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE delivered_at END
-            """, (order_id, tracking, status, retry_count, error, tracking, status, retry_count, error, status))
+            # Se order_data foi fornecido, extrair campos individuais
+            if order_data:
+                order_code = order_data.get("order_code")
+                customer = order_data.get("customer", {})
+                address = order_data.get("address", {})
+                total_value = order_data.get("total_value", 0)
+                shipping_cost = order_data.get("shipping_cost", 0)
+                order_json = json.dumps(order_data, ensure_ascii=False)
+            else:
+                order_code = None
+                customer = {}
+                address = {}
+                total_value = 0
+                shipping_cost = 0
+                order_json = None
+            
+            if order_data:
+                # INSERT com dados completos
+                con.execute("""
+                INSERT INTO orders(
+                    bagy_order_id, bagy_order_code, tracking_code, status,
+                    customer_name, customer_cpf, customer_email, customer_phone,
+                    address_zipcode, address_street, address_number, address_complement,
+                    address_neighborhood, address_city, address_state,
+                    total_value, shipping_cost, order_data_json,
+                    retry_count, last_error, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(bagy_order_id) DO UPDATE SET
+                    bagy_order_code = COALESCE(?, bagy_order_code),
+                    tracking_code = COALESCE(?, tracking_code),
+                    status = ?,
+                    customer_name = COALESCE(?, customer_name),
+                    customer_cpf = COALESCE(?, customer_cpf),
+                    customer_email = COALESCE(?, customer_email),
+                    customer_phone = COALESCE(?, customer_phone),
+                    address_zipcode = COALESCE(?, address_zipcode),
+                    address_street = COALESCE(?, address_street),
+                    address_number = COALESCE(?, address_number),
+                    address_complement = COALESCE(?, address_complement),
+                    address_neighborhood = COALESCE(?, address_neighborhood),
+                    address_city = COALESCE(?, address_city),
+                    address_state = COALESCE(?, address_state),
+                    total_value = COALESCE(?, total_value),
+                    shipping_cost = COALESCE(?, shipping_cost),
+                    order_data_json = COALESCE(?, order_data_json),
+                    retry_count = ?,
+                    last_error = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    delivered_at = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE delivered_at END
+                """, (
+                    # INSERT values
+                    order_id, order_code, tracking, status,
+                    customer.get("name"), customer.get("cpf"), customer.get("email"), customer.get("phone"),
+                    address.get("zipcode"), address.get("street"), address.get("number"), address.get("complement"),
+                    address.get("neighborhood"), address.get("city"), address.get("state"),
+                    total_value, shipping_cost, order_json,
+                    retry_count, error,
+                    # UPDATE values
+                    order_code, tracking, status,
+                    customer.get("name"), customer.get("cpf"), customer.get("email"), customer.get("phone"),
+                    address.get("zipcode"), address.get("street"), address.get("number"), address.get("complement"),
+                    address.get("neighborhood"), address.get("city"), address.get("state"),
+                    total_value, shipping_cost, order_json,
+                    retry_count, error, status
+                ))
+            else:
+                # INSERT simples (compatibilidade com código existente)
+                con.execute("""
+                INSERT INTO orders(bagy_order_id, tracking_code, status, retry_count, last_error, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(bagy_order_id) DO UPDATE SET
+                    tracking_code = COALESCE(?, tracking_code),
+                    status = ?,
+                    retry_count = ?,
+                    last_error = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    delivered_at = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE delivered_at END
+                """, (order_id, tracking, status, retry_count, error, tracking, status, retry_count, error, status))
             con.commit()
         logger.debug(f"💾 Pedido {order_id} salvo: status={status}, tracking={tracking}")
     except Exception as e:
@@ -254,15 +341,14 @@ def normalize_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
     # Formato direto (pedido completo no root)
     return pedido
 
-@retry_on_failure(max_attempts=MAX_RETRIES)
-def send_to_frenet(pedido: Dict[str, Any]) -> None:
-    """Envia dados do pedido para Frenet (para gerar etiqueta manualmente depois)."""
+def save_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
+    """Salva dados completos do pedido no banco para consulta posterior."""
     # Normalizar dados do pedido
     pedido = normalize_order_data(pedido)
     
     order_id = pedido.get("id", "UNKNOWN")
     order_code = pedido.get("code", "UNKNOWN")
-    logger.info(f"📋 Enviando dados do pedido #{order_code} (ID: {order_id}) para Frenet...")
+    logger.info(f"📋 Salvando dados do pedido #{order_code} (ID: {order_id})...")
     
     # Extrair dados do endereço
     addr = pedido.get("address", {}) or pedido.get("shipping_address", {})
@@ -283,57 +369,49 @@ def send_to_frenet(pedido: Dict[str, Any]) -> None:
         logger.warning(f"⚠️  Pedido {order_id} sem itens, usando valores padrão")
         items = [{"weight": 1, "length": 20, "height": 10, "width": 15, "quantity": 1}]
     
-    produtos = []
-    for it in items:
-        produtos.append({
-            "Weight": max(float(it.get("weight", 1)), 0.1),  # Peso mínimo 0.1kg
-            "Length": max(float(it.get("length", 20)), 1),
-            "Height": max(float(it.get("height", 10)), 1),
-            "Width": max(float(it.get("width", 15)), 1),
-            "Quantity": max(int(it.get("quantity", 1)), 1)
-        })
-    
     # Calcular valor total do pedido
     invoice_value = float(pedido.get("total", 0)) or sum(
         float(it.get("price", 0)) * int(it.get("quantity", 1)) for it in items
     )
-    invoice_value = max(invoice_value, FORCE_VALUE)  # Usar valor mínimo se necessário
     
-    # Montar payload COMPLETO com todos os dados para Frenet
-    payload = {
-        "SellerCEP": SELLER_CEP.replace("-", "").replace(".", ""),
-        "RecipientName": cust.get("name", "Cliente"),
-        "RecipientCEP": addr.get("zipcode", "").replace("-", "").replace(".", ""),
-        "RecipientAddress": addr.get("street", ""),
-        "RecipientNumber": addr.get("number", "S/N"),
-        "RecipientComplement": addr.get("complement", ""),
-        "RecipientDistrict": addr.get("district", addr.get("neighborhood", "")),
-        "RecipientCity": addr.get("city", ""),
-        "RecipientState": addr.get("state", ""),
-        "RecipientPhone": cust.get("phone", ""),
-        "RecipientEmail": cust.get("email", ""),
-        "ShipmentInvoiceValue": invoice_value,
-        "ShippingItemArray": produtos,
-        "OrderId": order_code  # Referência do pedido
+    # Montar dados formatados para fácil visualização
+    order_data = {
+        "order_id": order_id,
+        "order_code": order_code,
+        "customer": {
+            "name": cust.get("name", ""),
+            "cpf": cust.get("cpf", cust.get("document", "")),
+            "email": cust.get("email", ""),
+            "phone": cust.get("phone", "")
+        },
+        "address": {
+            "zipcode": addr.get("zipcode", "").replace("-", "").replace(".", ""),
+            "street": addr.get("street", addr.get("address", "")),
+            "number": addr.get("number", "S/N"),
+            "complement": addr.get("complement", ""),
+            "neighborhood": addr.get("district", addr.get("neighborhood", "")),
+            "city": addr.get("city", ""),
+            "state": addr.get("state", "")
+        },
+        "items": [
+            {
+                "name": it.get("name", "Produto"),
+                "quantity": it.get("quantity", 1),
+                "weight": it.get("weight", 1),
+                "price": it.get("price", 0)
+            }
+            for it in items
+        ],
+        "total_value": invoice_value,
+        "shipping_cost": float(pedido.get("shipping_cost", 0))
     }
     
-    logger.info(f"📤 Enviando dados para Frenet...")
-    logger.info(f"📍 Origem: {payload['SellerCEP']} → Destino: {payload['RecipientCEP']}")
-    logger.info(f"💰 Valor: R$ {invoice_value} | Cliente: {cust.get('name', 'N/A')}")
-    logger.debug(f"Payload Frenet: {payload}")
+    logger.info(f"📍 Origem: {SELLER_CEP} → Destino: {order_data['address']['zipcode']}")
+    logger.info(f"💰 Valor: R$ {invoice_value} | Cliente: {order_data['customer']['name']}")
+    logger.info(f"✅ Dados do pedido #{order_code} salvos localmente!")
+    logger.info(f"👉 Acesse /orders para visualizar todos os pedidos pendentes")
     
-    r = requests.post(SHIPPING_API_URL, headers=shipping_api_headers(), json=payload, timeout=REQUEST_TIMEOUT)
-    
-    if not r.ok:
-        error_msg = f"Erro Frenet [HTTP {r.status_code}]: {r.text}"
-        logger.error(f"❌ {error_msg}")
-        raise Exception(error_msg)
-    
-    data = r.json() if r.content else {}
-    logger.info(f"📥 Resposta Frenet: {data}")
-    
-    logger.info(f"✅ Dados do pedido #{order_code} enviados para Frenet com sucesso!")
-    logger.info(f"👉 Próximo passo: Acesse a Frenet para gerar a etiqueta manualmente")
+    return order_data
 
 def frenet_check_delivered(code: str) -> bool:
     """Verifica se pedido foi entregue consultando rastreio na Frenet."""
@@ -437,29 +515,30 @@ def webhook():
                     "status": existing[0]
                 }), 200
         
-        # Processar pedido - APENAS ENVIAR DADOS PARA FRENET
+        # Processar pedido - SALVAR DADOS LOCALMENTE
         try:
-            send_to_frenet(pedido_normalizado)
+            order_data = save_order_data(pedido_normalizado)
             
-            # Salvar no banco como "pending" (aguardando você gerar etiqueta manualmente)
-            db_save(order_id, tracking=None, status="pending")
+            # Salvar no banco como "pending" (aguardando você gerar etiqueta manualmente na Frenet)
+            db_save(order_id, tracking=None, status="pending", order_data=order_data)
             
-            logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) enviado para Frenet!")
-            logger.info(f"📋 Acesse a Frenet para gerar a etiqueta manualmente")
-            logger.info(f"⏳ Após postar, o sistema vai monitorar o rastreio automaticamente")
+            logger.info(f"✅ Pedido #{order_code} (ID: {order_id}) salvo com sucesso!")
+            logger.info(f"📋 Acesse /orders para visualizar os pedidos pendentes")
+            logger.info(f"👉 Copie os dados e crie a etiqueta manualmente na Frenet")
             
             return jsonify({
                 "success": True,
                 "order_id": order_id,
                 "order_code": order_code,
-                "message": "Dados enviados para Frenet. Gere a etiqueta manualmente na plataforma.",
+                "message": "Pedido salvo com sucesso! Acesse /orders para visualizar.",
+                "order_data": order_data,
                 "next_steps": [
-                    "1. Acesse a plataforma Frenet",
-                    "2. Encontre o pedido e escolha a transportadora",
-                    "3. Gere a etiqueta",
-                    "4. Faça a postagem",
-                    "5. Informe o código de rastreio na Frenet",
-                    "6. O sistema vai monitorar e atualizar a Bagy quando entregue"
+                    "1. Acesse https://seu-dominio.railway.app/orders",
+                    "2. Visualize os pedidos pendentes",
+                    "3. Copie os dados do cliente e endereço",
+                    "4. Acesse a plataforma Frenet e crie o pedido manualmente",
+                    "5. Gere a etiqueta e faça a postagem",
+                    "6. O sistema vai monitorar o rastreio e atualizar a Bagy quando entregue"
                 ]
             }), 200
             
@@ -573,6 +652,278 @@ def stats_endpoint():
         }), 200
     except Exception as e:
         logger.error(f"❌ Erro ao obter estatísticas: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/orders", methods=["GET"])
+def orders_list():
+    """Endpoint para visualizar pedidos salvos."""
+    import json
+    try:
+        status_filter = request.args.get("status", "pending")
+        
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            query = """
+                SELECT * FROM orders 
+                WHERE status = ? OR ? = 'all'
+                ORDER BY created_at DESC
+                LIMIT 100
+            """
+            cur = con.execute(query, (status_filter, status_filter))
+            rows = cur.fetchall()
+            
+            orders = []
+            for row in rows:
+                order = dict(row)
+                # Parse JSON data if available
+                if order.get("order_data_json"):
+                    try:
+                        order["parsed_data"] = json.loads(order["order_data_json"])
+                    except:
+                        order["parsed_data"] = None
+                orders.append(order)
+        
+        # Formato HTML para visualização fácil
+        if request.args.get("format") != "json":
+            html = """
+            <!DOCTYPE html>
+            <html lang="pt-BR">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Pedidos Bagy - Frenet</title>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                        background: #f5f7fa;
+                        padding: 20px;
+                    }
+                    .container { max-width: 1400px; margin: 0 auto; }
+                    .header {
+                        background: white;
+                        padding: 30px;
+                        border-radius: 10px;
+                        margin-bottom: 20px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    }
+                    h1 { color: #2c3e50; margin-bottom: 10px; }
+                    .filters {
+                        display: flex;
+                        gap: 10px;
+                        margin-top: 20px;
+                    }
+                    .filter-btn {
+                        padding: 10px 20px;
+                        border: 2px solid #3498db;
+                        background: white;
+                        color: #3498db;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        text-decoration: none;
+                        transition: all 0.3s;
+                    }
+                    .filter-btn:hover, .filter-btn.active {
+                        background: #3498db;
+                        color: white;
+                    }
+                    .order-card {
+                        background: white;
+                        padding: 25px;
+                        border-radius: 10px;
+                        margin-bottom: 15px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    }
+                    .order-header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        margin-bottom: 20px;
+                        padding-bottom: 15px;
+                        border-bottom: 2px solid #ecf0f1;
+                    }
+                    .order-id {
+                        font-size: 20px;
+                        font-weight: bold;
+                        color: #2c3e50;
+                    }
+                    .status {
+                        padding: 8px 15px;
+                        border-radius: 20px;
+                        font-size: 14px;
+                        font-weight: 600;
+                    }
+                    .status-pending { background: #fff3cd; color: #856404; }
+                    .status-shipped { background: #d1ecf1; color: #0c5460; }
+                    .status-delivered { background: #d4edda; color: #155724; }
+                    .status-error { background: #f8d7da; color: #721c24; }
+                    .order-info {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                        gap: 20px;
+                    }
+                    .info-section {
+                        padding: 15px;
+                        background: #f8f9fa;
+                        border-radius: 8px;
+                    }
+                    .info-title {
+                        font-weight: 600;
+                        color: #495057;
+                        margin-bottom: 10px;
+                        font-size: 14px;
+                        text-transform: uppercase;
+                    }
+                    .info-content {
+                        color: #212529;
+                        line-height: 1.6;
+                    }
+                    .info-content strong {
+                        display: inline-block;
+                        width: 100px;
+                        color: #6c757d;
+                    }
+                    .copy-btn {
+                        background: #28a745;
+                        color: white;
+                        border: none;
+                        padding: 10px 20px;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        margin-top: 10px;
+                    }
+                    .copy-btn:hover { background: #218838; }
+                    .empty-state {
+                        text-align: center;
+                        padding: 60px 20px;
+                        background: white;
+                        border-radius: 10px;
+                        color: #6c757d;
+                    }
+                    .empty-state i { font-size: 64px; margin-bottom: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>📦 Pedidos Bagy → Frenet</h1>
+                        <p style="color: #6c757d; margin-top: 10px;">
+                            Visualize e copie os dados dos pedidos para criar etiquetas na Frenet
+                        </p>
+                        <div class="filters">
+                            <a href="/orders?status=pending" class="filter-btn {pending_active}">⏳ Pendentes</a>
+                            <a href="/orders?status=shipped" class="filter-btn {shipped_active}">📮 Enviados</a>
+                            <a href="/orders?status=delivered" class="filter-btn {delivered_active}">✅ Entregues</a>
+                            <a href="/orders?status=error" class="filter-btn {error_active}">❌ Erros</a>
+                            <a href="/orders?status=all" class="filter-btn {all_active}">📋 Todos</a>
+                            <a href="/orders?status={status}&format=json" class="filter-btn">📄 JSON</a>
+                        </div>
+                    </div>
+            """.format(
+                pending_active="active" if status_filter == "pending" else "",
+                shipped_active="active" if status_filter == "shipped" else "",
+                delivered_active="active" if status_filter == "delivered" else "",
+                error_active="active" if status_filter == "error" else "",
+                all_active="active" if status_filter == "all" else "",
+                status=status_filter
+            )
+            
+            if not orders:
+                html += """
+                    <div class="empty-state">
+                        <div style="font-size: 64px; margin-bottom: 20px;">📭</div>
+                        <h2>Nenhum pedido encontrado</h2>
+                        <p style="margin-top: 10px;">
+                            Os pedidos aparecerão aqui quando forem faturados no Bagy
+                        </p>
+                    </div>
+                """
+            else:
+                for order in orders:
+                    status_class = f"status-{order['status']}"
+                    status_text = {
+                        "pending": "⏳ Aguardando",
+                        "shipped": "📮 Enviado",
+                        "delivered": "✅ Entregue",
+                        "error": "❌ Erro"
+                    }.get(order["status"], order["status"])
+                    
+                    parsed = order.get("parsed_data", {})
+                    customer = parsed.get("customer", {}) if parsed else {}
+                    address = parsed.get("address", {}) if parsed else {}
+                    
+                    html += f"""
+                    <div class="order-card">
+                        <div class="order-header">
+                            <div>
+                                <div class="order-id">Pedido #{order.get('bagy_order_code', order['bagy_order_id'])}</div>
+                                <small style="color: #6c757d;">ID: {order['bagy_order_id']} | {order.get('created_at', 'N/A')}</small>
+                            </div>
+                            <span class="status {status_class}">{status_text}</span>
+                        </div>
+                        
+                        <div class="order-info">
+                            <div class="info-section">
+                                <div class="info-title">👤 Cliente</div>
+                                <div class="info-content">
+                                    <div><strong>Nome:</strong> {order.get('customer_name', customer.get('name', 'N/A'))}</div>
+                                    <div><strong>CPF:</strong> {order.get('customer_cpf', customer.get('cpf', 'N/A'))}</div>
+                                    <div><strong>Email:</strong> {order.get('customer_email', customer.get('email', 'N/A'))}</div>
+                                    <div><strong>Telefone:</strong> {order.get('customer_phone', customer.get('phone', 'N/A'))}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="info-section">
+                                <div class="info-title">📍 Endereço de Entrega</div>
+                                <div class="info-content">
+                                    <div><strong>CEP:</strong> {order.get('address_zipcode', address.get('zipcode', 'N/A'))}</div>
+                                    <div><strong>Rua:</strong> {order.get('address_street', address.get('street', 'N/A'))}</div>
+                                    <div><strong>Número:</strong> {order.get('address_number', address.get('number', 'N/A'))}</div>
+                                    <div><strong>Complemento:</strong> {order.get('address_complement', address.get('complement', '-'))}</div>
+                                    <div><strong>Bairro:</strong> {order.get('address_neighborhood', address.get('neighborhood', 'N/A'))}</div>
+                                    <div><strong>Cidade:</strong> {order.get('address_city', address.get('city', 'N/A'))} - {order.get('address_state', address.get('state', 'N/A'))}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="info-section">
+                                <div class="info-title">💰 Valores</div>
+                                <div class="info-content">
+                                    <div><strong>Total:</strong> R$ {order.get('total_value', 0):.2f}</div>
+                                    <div><strong>Frete:</strong> R$ {order.get('shipping_cost', 0):.2f}</div>
+                                    {f'<div><strong>Rastreio:</strong> {order.get("tracking_code")}</div>' if order.get('tracking_code') else ''}
+                                </div>
+                                <button class="copy-btn" onclick="copyOrder('{order['bagy_order_id']}')">
+                                    📋 Copiar Dados
+                                </button>
+                            </div>
+                        </div>
+                        
+                        {f'<div style="margin-top: 15px; padding: 10px; background: #f8d7da; color: #721c24; border-radius: 5px;"><strong>Erro:</strong> {order.get("last_error")}</div>' if order.get('last_error') else ''}
+                    </div>
+                    """
+            
+            html += """
+                </div>
+                <script>
+                    function copyOrder(orderId) {
+                        // TODO: Implementar cópia para clipboard
+                        alert('Funcionalidade de cópia em desenvolvimento. Por enquanto, copie manualmente os dados.');
+                    }
+                </script>
+            </body>
+            </html>
+            """
+            return html
+        
+        # Formato JSON
+        return jsonify({
+            "orders": orders,
+            "count": len(orders),
+            "status_filter": status_filter
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar pedidos: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
