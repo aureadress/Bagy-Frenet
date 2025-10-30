@@ -1,18 +1,43 @@
 # 🚀 Integração Bagy → Frenet
 
-Webhook Flask robusto e otimizado para automatizar o envio de pedidos faturados da **Bagy** para a **Frenet** com monitoramento automático de entrega.
+Webhook Flask robusto e otimizado para **capturar pedidos faturados da Bagy**, salvar localmente com **painel web de visualização**, e permitir que você crie etiquetas manualmente na **Frenet** com monitoramento automático de entrega.
+
+## 🎯 Como Funciona
+
+1. **📥 Bagy dispara webhook** quando pedido é faturado (fulfillment_status = "invoiced")
+2. **💾 Sistema salva** todos os dados do pedido no banco local
+3. **🌐 Você acessa** o painel web `/orders` para ver pedidos pendentes
+4. **📋 Copia dados** de cliente e endereço para criar pedido na Frenet
+5. **🏷️ Gera etiqueta** manualmente na plataforma Frenet
+6. **📦 Sistema monitora** rastreio automaticamente
+7. **✅ Atualiza Bagy** quando pedido é entregue
 
 ## ✨ Funcionalidades
 
 - ✅ **Recebe webhooks** da Bagy quando pedidos são faturados
-- ✅ **Envia automaticamente** para Frenet com valor e transportadora configuráveis
-- ✅ **Atualiza status** na Bagy (enviado → entregue)
+- ✅ **Salva dados completos** no banco SQLite com campos estruturados
+- ✅ **Painel web HTML** responsivo para visualizar pedidos
+- ✅ **Filtros por status** (pending, shipped, delivered, error)
+- ✅ **Export JSON** para integração com outras ferramentas
 - ✅ **Monitor automático** verifica entregas periodicamente
+- ✅ **Atualiza Bagy** automaticamente quando pedido é entregue
 - ✅ **Retry inteligente** em caso de falhas
 - ✅ **Logs detalhados** com emojis para fácil visualização
 - ✅ **Health checks** e estatísticas em tempo real
-- ✅ **Banco SQLite** para persistência e controle
 - ✅ **100% pronto para produção**
+
+## ⚠️ Importante: API da Frenet
+
+A API oficial da Frenet **NÃO possui endpoints para criar pedidos programaticamente**. Apenas oferece:
+- ✅ `/shipping/quote` - Cotação de frete
+- ✅ `/tracking/trackinginfo` - Rastreamento
+- ❌ Criação de pedidos (não existe!)
+
+Por isso, este sistema:
+1. Salva os dados localmente
+2. Você acessa o painel web
+3. Copia os dados e cria manualmente na Frenet
+4. Sistema monitora o rastreio automaticamente
 
 ## 📋 Requisitos
 
@@ -161,10 +186,59 @@ Após fazer o deploy, configure o webhook na plataforma Bagy:
 2. Clique em **"Adicionar Webhook"**
 3. Configure:
    - **Evento:** `Pedido Faturado` ou `Order Invoiced`
-   - **URL:** `https://sua-url.com/webhook`
+   - **URL:** `https://bagy-frenet-production.up.railway.app/webhook`
    - **Método:** `POST`
    - **Content-Type:** `application/json`
 4. Salve e teste enviando um pedido de teste
+
+### URLs Suportadas
+
+O sistema aceita webhooks em **3 endpoints** diferentes para máxima compatibilidade:
+- `https://seu-app.railway.app/` (raiz)
+- `https://seu-app.railway.app/webhook` (recomendado)
+- `https://seu-app.railway.app/order`
+
+Todos suportam **GET** e **POST** para compatibilidade com integrações nativas.
+
+## 📋 Workflow Completo Passo a Passo
+
+### 1️⃣ Cliente faz um pedido na Bagy
+- Pedido entra com status "pending" ou "processing"
+
+### 2️⃣ Você fatura o pedido na Bagy
+- Muda status para "invoiced" (faturado)
+- Bagy dispara webhook automaticamente
+
+### 3️⃣ Sistema recebe e salva o pedido
+- Webhook captura dados completos
+- Salva no banco de dados SQLite
+- Status inicial: `pending`
+
+### 4️⃣ Você acessa o painel web
+- Abra: `https://seu-app.railway.app/orders`
+- Veja todos os pedidos pendentes
+- Filtre por status se necessário
+
+### 5️⃣ Copie os dados e crie na Frenet
+- Acesse [painel.frenet.com.br](https://painel.frenet.com.br)
+- Crie o pedido com os dados do painel
+- Escolha a transportadora (recomendado: Loggi Drop Off)
+- Gere a etiqueta
+- Imprima e cole no pacote
+
+### 6️⃣ Faça a postagem
+- Leve o pacote ao ponto de coleta
+- Ou aguarde coleta no local
+
+### 7️⃣ Sistema monitora automaticamente
+- A cada 10 minutos, verifica status no rastreio
+- Quando detecta "entregue", atualiza a Bagy
+- Pedido fica com status `delivered` no banco
+
+### 8️⃣ Cliente recebe e tudo está sincronizado!
+- Bagy mostra pedido como entregue
+- Sistema local tem registro completo
+- Processo finalizado ✅
 
 ## 📊 Endpoints da API
 
@@ -227,6 +301,58 @@ Estatísticas de pedidos
 }
 ```
 
+### `GET /orders`
+🆕 **Painel web para visualizar pedidos salvos**
+
+**Parâmetros de query:**
+- `status` - Filtrar por status: `pending`, `shipped`, `delivered`, `error`, `all` (padrão: `pending`)
+- `format` - Formato de resposta: `html` (padrão), `json`
+
+**Exemplos:**
+- `https://seu-app.railway.app/orders` - Painel HTML com pedidos pendentes
+- `https://seu-app.railway.app/orders?status=all` - Todos os pedidos
+- `https://seu-app.railway.app/orders?status=pending&format=json` - JSON de pendentes
+
+**Resposta HTML:**
+Interface web bonita com:
+- Cards de pedidos com dados completos
+- Filtros por status (pendente, enviado, entregue, erro)
+- Informações de cliente, endereço e valores
+- Botão para copiar dados
+- Design responsivo
+
+**Resposta JSON:**
+```json
+{
+  "orders": [
+    {
+      "id": 1,
+      "bagy_order_id": "12345",
+      "bagy_order_code": "TEST-2025-001",
+      "status": "pending",
+      "customer_name": "Maria Silva",
+      "customer_cpf": "12345678901",
+      "customer_email": "maria@exemplo.com",
+      "customer_phone": "11987654321",
+      "address_zipcode": "01310100",
+      "address_street": "Avenida Paulista",
+      "address_number": "1578",
+      "address_complement": "Andar 5",
+      "address_neighborhood": "Bela Vista",
+      "address_city": "São Paulo",
+      "address_state": "SP",
+      "total_value": 199.90,
+      "shipping_cost": 10.00,
+      "tracking_code": null,
+      "created_at": "2025-10-30 19:58:40",
+      "updated_at": "2025-10-30 19:58:40"
+    }
+  ],
+  "count": 1,
+  "status_filter": "pending"
+}
+```
+
 ### `POST /webhook`
 Recebe webhooks da Bagy (configurado automaticamente)
 
@@ -279,8 +405,8 @@ Recebe webhooks da Bagy (configurado automaticamente)
 | `FRENET_TRACK_URL` | ❌ Não | `https://api.frenet.com.br/tracking/trackinginfo` | URL da API de rastreio Frenet |
 | `SELLER_CEP` | ❌ Não | `03320-001` | CEP do remetente |
 | `FORCE_VALUE` | ❌ Não | `10.00` | Valor fixo do frete (R$) |
-| `FORCE_CARRIER_CODE` | ❌ Não | `LOGGI` | Código da transportadora |
-| `FORCE_CARRIER_NAME` | ❌ Não | `Entrega Loggi` | Nome da transportadora |
+| `FORCE_CARRIER_CODE` | ❌ Não | `LOG_DRPOFF` | Código da transportadora (ex: LOG_DRPOFF para Loggi Drop Off) |
+| `FORCE_CARRIER_NAME` | ❌ Não | `Loggi Drop Off` | Nome da transportadora |
 | `TRACKER_INTERVAL` | ❌ Não | `600` | Intervalo de verificação de rastreio (segundos) |
 | `DB_PATH` | ❌ Não | `data.db` | Caminho do banco de dados SQLite |
 | `MAX_RETRIES` | ❌ Não | `3` | Número máximo de tentativas em caso de erro |
