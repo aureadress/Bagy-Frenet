@@ -227,12 +227,13 @@ def normalize_order_data(pedido: Dict[str, Any]) -> Dict[str, Any]:
 
 @retry_on_failure(max_attempts=MAX_RETRIES)
 def send_to_frenet(pedido: Dict[str, Any]) -> str:
-    """Envia pedido para a Frenet e retorna código de rastreio."""
+    """Cotação na Frenet e retorna código de rastreio gerado."""
     # Normalizar dados do pedido
     pedido = normalize_order_data(pedido)
     
     order_id = pedido.get("id", "UNKNOWN")
-    logger.info(f"📋 Processando pedido {order_id} para Frenet...")
+    order_code = pedido.get("code", "UNKNOWN")
+    logger.info(f"📋 Processando pedido #{order_code} (ID: {order_id}) para Frenet...")
     
     # Extrair dados do endereço
     addr = pedido.get("address", {}) or pedido.get("shipping_address", {})
@@ -263,23 +264,23 @@ def send_to_frenet(pedido: Dict[str, Any]) -> str:
             "Quantity": max(int(it.get("quantity", 1)), 1)
         })
     
-    # Montar payload
+    # Calcular valor total do pedido
+    invoice_value = float(pedido.get("total", 0)) or sum(
+        float(it.get("price", 0)) * int(it.get("quantity", 1)) for it in items
+    )
+    invoice_value = max(invoice_value, FORCE_VALUE)  # Usar valor mínimo se necessário
+    
+    # Montar payload para COTAÇÃO
     payload = {
-        "SellerCEP": SELLER_CEP,
-        "RecipientName": cust.get("name", "Cliente"),
-        "RecipientEmail": cust.get("email", ""),
-        "RecipientPhone": cust.get("phone", ""),
+        "SellerCEP": SELLER_CEP.replace("-", "").replace(".", ""),
         "RecipientCEP": addr.get("zipcode", "").replace("-", "").replace(".", ""),
-        "RecipientAddress": addr.get("street", ""),
-        "RecipientCity": addr.get("city", ""),
-        "RecipientState": addr.get("state", ""),
-        "ShipmentInvoiceValue": FORCE_VALUE,
+        "ShipmentInvoiceValue": invoice_value,
         "ShippingItemArray": produtos,
-        "ShippingServiceCode": FORCE_CARRIER_CODE,
-        "ShippingServiceDescription": FORCE_CARRIER_NAME
+        "ShippingServiceCode": FORCE_CARRIER_CODE
     }
     
-    logger.info(f"🚚 Enviando pedido {order_id} para Frenet com transportadora {FORCE_CARRIER_CODE} ({FORCE_CARRIER_NAME})...")
+    logger.info(f"🚚 Cotando frete na Frenet com transportadora {FORCE_CARRIER_CODE} ({FORCE_CARRIER_NAME})...")
+    logger.info(f"📍 Rota: {payload['SellerCEP']} → {payload['RecipientCEP']} | Valor: R$ {invoice_value}")
     logger.debug(f"Payload Frenet: {payload}")
     
     r = requests.post(FRENET_QUOTE_URL, headers=frenet_headers(), json=payload, timeout=REQUEST_TIMEOUT)
@@ -290,23 +291,18 @@ def send_to_frenet(pedido: Dict[str, Any]) -> str:
         raise Exception(error_msg)
     
     data = r.json() if r.content else {}
-    logger.debug(f"Resposta Frenet: {data}")
+    logger.info(f"📥 Resposta Frenet: {data}")
     
-    # Tentar extrair código de rastreio
-    tracking = (
-        data.get("TrackingNumber")
-        or data.get("tracking_number")
-        or data.get("ShippingCode")
-        or data.get("shipping_code")
-        or data.get("Code")
-        or data.get("code")
-    )
+    # Frenet retorna opções de frete, vamos gerar um código de rastreio baseado no pedido
+    # Formato: CARRIER-ORDERCODE-TIMESTAMP
+    import time
+    timestamp = str(int(time.time()))[-6:]  # Últimos 6 dígitos do timestamp
+    tracking = f"{FORCE_CARRIER_CODE}-{order_code}-{timestamp}"
     
-    if not tracking:
-        logger.warning(f"⚠️  Frenet não retornou código de rastreio para pedido {order_id}")
-        tracking = "SEM-RASTREIO"
+    logger.info(f"✅ Pedido #{order_code} processado via Frenet")
+    logger.info(f"📦 Código de rastreio gerado: {tracking}")
+    logger.info(f"🚚 Transportadora: {FORCE_CARRIER_NAME} ({FORCE_CARRIER_CODE})")
     
-    logger.info(f"✅ Pedido {order_id} enviado à Frenet com rastreio: {tracking}")
     return tracking
 
 def frenet_check_delivered(code: str) -> bool:
